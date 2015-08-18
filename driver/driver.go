@@ -40,6 +40,13 @@ type Driver interface {
 	Version() (uint64, error)
 }
 
+// May optionally be implemented by drivers.
+type SimulableDriver interface {
+	// Configure the driver in simulation mode. No actual queries will be
+	// executed.
+	SetSimulate() error
+}
+
 // New returns Driver and calls Initialize on it
 func New(url string) (Driver, error) {
 	u, err := neturl.Parse(url)

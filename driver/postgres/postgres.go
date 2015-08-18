@@ -12,7 +12,9 @@ import (
 )
 
 type Driver struct {
-	db *sql.DB
+	db                  *sql.DB
+	simulate            bool
+	createdVersionTable bool
 }
 
 const tableName = "schema_migrations"
@@ -27,21 +29,16 @@ func (driver *Driver) Initialize(url string) error {
 	}
 	driver.db = db
 
-	if err := driver.ensureVersionTableExists(); err != nil {
-		return err
-	}
+	return nil
+}
+
+func (driver *Driver) SetSimulate() error {
+	driver.simulate = true
 	return nil
 }
 
 func (driver *Driver) Close() error {
 	if err := driver.db.Close(); err != nil {
-		return err
-	}
-	return nil
-}
-
-func (driver *Driver) ensureVersionTableExists() error {
-	if _, err := driver.db.Exec("CREATE TABLE IF NOT EXISTS " + tableName + " (version int not null primary key);"); err != nil {
 		return err
 	}
 	return nil
@@ -61,8 +58,26 @@ func (driver *Driver) Migrate(f file.File, pipe chan interface{}) {
 		return
 	}
 
+	exec := func(q string, args ...interface{}) (sql.Result, error) {
+		if driver.simulate {
+			pipe <- "--------------------------------\n" + q
+			return nil, nil
+		} else {
+			r, err := tx.Exec(q, args...)
+			return r, err
+		}
+	}
+
+	if _, err := exec("CREATE TABLE IF NOT EXISTS \"" + tableName + "\" (version int not null primary key);"); err != nil {
+		pipe <- err
+		if err := tx.Rollback(); err != nil {
+			pipe <- err
+		}
+		return
+	}
+
 	if f.Direction == direction.Up {
-		if _, err := tx.Exec("INSERT INTO "+tableName+" (version) VALUES ($1)", f.Version); err != nil {
+		if _, err := exec(fmt.Sprintf("INSERT INTO \"%s\" (version) VALUES (%v)", tableName, f.Version)); err != nil {
 			pipe <- err
 			if err := tx.Rollback(); err != nil {
 				pipe <- err
@@ -70,7 +85,7 @@ func (driver *Driver) Migrate(f file.File, pipe chan interface{}) {
 			return
 		}
 	} else if f.Direction == direction.Down {
-		if _, err := tx.Exec("DELETE FROM "+tableName+" WHERE version=$1", f.Version); err != nil {
+		if _, err := exec(fmt.Sprintf("DELETE FROM \"%s\" WHERE version=%v", tableName, f.Version)); err != nil {
 			pipe <- err
 			if err := tx.Rollback(); err != nil {
 				pipe <- err
@@ -84,7 +99,7 @@ func (driver *Driver) Migrate(f file.File, pipe chan interface{}) {
 		return
 	}
 
-	if _, err := tx.Exec(string(f.Content)); err != nil {
+	if _, err := exec(string(f.Content)); err != nil {
 		pqErr := err.(*pq.Error)
 		offset, err := strconv.Atoi(pqErr.Position)
 		if err == nil && offset >= 0 {

@@ -3,8 +3,10 @@
 package migrate
 
 import (
+	"errors"
 	"fmt"
 	"io/ioutil"
+	urlpkg "net/url"
 	"os"
 	"os/signal"
 	"path"
@@ -261,13 +263,58 @@ func Create(url, migrationsPath, name string) (*file.MigrationFile, error) {
 	return mfile, nil
 }
 
+func shouldSimulate(url string) (simulate bool, cleanURL string, err error) {
+	u, err := urlpkg.Parse(url)
+	if err != nil {
+		fmt.Printf("clean url: %s", cleanURL)
+		return false, url, err
+	}
+
+	q, _ := urlpkg.ParseQuery(u.RawQuery)
+	_, simulate = q["simulate"]
+	simulateStr := q.Get("simulate")
+
+	if simulate {
+		q.Del("simulate")
+		u.RawQuery = q.Encode()
+		cleanURL = u.String()
+
+		if simulateStr == "" || simulateStr == "0" {
+			simulate = false
+		}
+	} else {
+		cleanURL = url
+	}
+
+	return
+}
+
+var errDoesNotSupportSimulation = errors.New("driver does not support simulation")
+
 // initDriverAndReadMigrationFilesAndGetVersion is a small helper
 // function that is common to most of the migration funcs
 func initDriverAndReadMigrationFilesAndGetVersion(url, migrationsPath string) (driver.Driver, *file.MigrationFiles, uint64, error) {
-	d, err := driver.New(url)
+	simulate, cleanURL, err := shouldSimulate(url)
 	if err != nil {
 		return nil, nil, 0, err
 	}
+
+	d, err := driver.New(cleanURL)
+	if err != nil {
+		return nil, nil, 0, err
+	}
+
+	if simulate {
+		if sd, ok := d.(driver.SimulableDriver); ok {
+			err = sd.SetSimulate()
+			if err != nil {
+				return nil, nil, 0, err
+			}
+		} else {
+			return nil, nil, 0, errDoesNotSupportSimulation
+		}
+	}
+
 	files, err := file.ReadMigrationFiles(migrationsPath, file.FilenameRegex(d.FilenameExtension()))
 	if err != nil {
 		d.Close() // TODO what happens with errors from this func?

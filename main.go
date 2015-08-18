@@ -178,9 +178,9 @@ func writePipe(pipe chan interface{}) (ok bool) {
 						f := item.(file.File)
 						c := color.New(color.FgBlue)
 						if f.Direction == direction.Up {
-							c.Print(">")
+							c.Print("-->--")
 						} else if f.Direction == direction.Down {
-							c.Print("<")
+							c.Print("--<--")
 						}
 						fmt.Printf(" %s\n", f.FileName)
 
